@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>    
+    <meta charset="UTF-8">    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">    
+    <title>Malomatia AI</title>    
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        #language-buttons .language-button {
+            padding: 5px 15px;
+    height: 37px;
+    font-size: 15px;
+    transform: translate(56%, 358%);
+    color: #fff;
+    background-color: #393737c4;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    margin: 0px 17px;
+    transition: background-color 0.3s ease;
+    display: inline-block;
+    text-align: center;
+    font-family: fangsong;
+        }
+
+        #language-buttons .language-button:hover {
+            background-color: #2e2c2cc4;
+        }
+    </style>
+</head>
+<body>    
+    <div id="logo">
+        <img src="{{ url_for('static', filename='assets/Malomatia_logo.png') }}" alt="Logo">
+    </div>
+    <div id="circle">
+        <div id="language-buttons">
+            <button id="english-button" class="language-button" data-language="en-US">English</button>
+            <button id="arabic-button" class="language-button" data-language="ar-SA">Arabic</button>
+        </div>        
+        <div id="loading"></div>
+        <div id="loading-message" class="loader"></div>
+    </div>
+    <script>        
+        $(document).ready(function() {
+            window.speechSynthesis.cancel();
+
+            let recognition = new webkitSpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            let selectedLanguage = "";
+           
+            let isRecognitionActive = false;
+            let audioContext, analyser, microphoneStream;
+            let idleTimer;
+            let transcriptText = "";
+            const circle = $("#circle");
+            const resultText = $("#result-text");
+            const loadingMessage = $("#loading-message");
+            let isAudioContextInitialized = false;
+            let isResponseAudioPlaying = false;
+            let responseAudio = null;
+            
+            let isRequestPending = false;
+            let ajaxRequest = null;
+
+            let stopRecognitionFlag = false;
+            let isTtsAudio = false;
+            let language = "";
+
+            $("#english-button, #arabic-button").one("click", function() {
+                selectedLanguage = $(this).data("language");
+                console.log("selected language: ", selectedLanguage);
+
+                recognition.lang = selectedLanguage;
+
+                $("#english-button").hide();
+                $("#arabic-button").hide();
+                
+                loadingMessage.show();
+                $("#loading").show();
+               
+                if (!isRecognitionActive) {
+                    recognition.start();
+                    isRecognitionActive = true;
+                }
+
+                recognition.onstart = () => {
+                    console.log("Speech recognition started");
+                    if (!isTtsAudio){
+                    isRecognitionActive = true;
+                    if (isResponseAudioPlaying) {
+                        window.speechSynthesis.cancel();
+                        isResponseAudioPlaying = false;
+                        isAudioContextInitialized = true;
+                    }
+                    startAudioProcessing();
+                };
+            }
+            });
+
+            recognition.onresult = (event) => {
+
+                startVoiceProcessing()
+
+                if (responseAudio != null){
+                    window.speechSynthesis.cancel();
+                }
+
+                if (isResponseAudioPlaying) {
+                    window.speechSynthesis.cancel();
+                    console.log("Audio playback interrupted by user.");
+                                circle.css({ width: "300px", height: "300px" });
+                                if (responseAudio) {
+                                    responseAudio.pause();
+                                    responseAudio.currentTime = 0;
+                                }
+                                isResponseAudioPlaying = false;
+
+                                if (microphoneStream) {
+                                console.log("reconnecting the microphone analyser");
+                                    microphoneStream.connect(analyser);
+                                }
+                    isResponseAudioPlaying = false;
+                }
+               
+                let tempTranscript = "";
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    tempTranscript += event.results[i][0].transcript;
+
+                    if (event.results[i].isFinal) {
+                        transcriptText += event.results[i][0].transcript.trim() + " ";
+                    }
+                }
+
+                resultText.text((transcriptText).trim());
+                resetIdleTimer();
+            };
+
+            recognition.onerror = (event) => {
+                console.error("Recognition error:", event.error);
+                if (!isRecognitionActive) {
+                    recognition.start();
+                    isRecognitionActive = true;
+                }
+            }
+
+            recognition.onend = () => {
+                console.log("Recognition ended.");
+                isResponseAudioPlaying = false;
+                isRecognitionActive = false;
+                circle.css({ width: "300px", height: "300px" });
+                if (!isRecognitionActive && !stopRecognitionFlag) {
+                    recognition.start();
+                    console.log("Recognition restarted.");
+                    startAudioProcessing();
+                    isRecognitionActive = true;
+                }
+                resetIdleTimer();
+            };
+
+            function startRecognition() {
+                if (!isRecognitionActive) {
+                    recognition.stop();
+                    recognition.start();
+                    isRecognitionActive = true;
+                    stopRecognitionFlag = false;
+                }
+            }
+
+            function stopRecognition() {
+                if (isRecognitionActive) {
+                    console.log("isRecognitionActive inside stopRecognition:", isRecognitionActive);
+                    recognition.stop();
+                    isRecognitionActive = false;
+                    stopRecognitionFlag = true;
+                }
+            }
+
+            function startAudioProcessing() {
+                console.log("startAudioProcessing!!!");
+                if (isAudioContextInitialized) return;
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(stream => {
+                        $("#loading").hide();
+                        loadingMessage.hide();
+                        microphoneStream = audioContext.createMediaStreamSource(stream);
+                        microphoneStream.connect(analyser);
+                        isAudioContextInitialized = true;
+                        animateCircle();
+                    })
+                    .catch(err => {
+                        console.error("Microphone access error:", err);
+                        alert("Please allow the microphone access and try again.");
+                        location.reload();
+                    });
+            }
+
+            function startVoiceProcessing() {
+                console.log("startVoiceProcessing!!!");
+                if (isAudioContextInitialized) return;
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(stream => {
+                        $("#loading").hide();
+                        loadingMessage.hide();
+                        microphoneStream = audioContext.createMediaStreamSource(stream);
+                        microphoneStream.connect(analyser);
+                        isAudioContextInitialized = true;
+                        animateCircle();
+                    })
+                    .catch(err => {
+                        console.error("Microphone access error:", err);
+                        alert("Please allow the microphone access and try again.");
+                        location.reload();
+                    });
+            }
+            
+            function animateCircle() {
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                const update = () => {
+                    analyser.getByteFrequencyData(dataArray);
+                    const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                    if (average > 5) {
+                        const maxSize = 500;
+                        const minSize = 300;
+                        const size = minSize + (average / 255) * (maxSize - minSize);
+                        circle.css({ width: `${size}px`, height: `${size}px` });
+                    } else {
+                        circle.css({ width: "300px", height: "300px" });
+                    }
+
+                    if (average > 5) {
+                        const maxSize = 500;
+                        const minSize = 300;
+                        const loadingSize = minSize + (average / 255) * (maxSize - minSize);
+                        $("#loading").css({ width: `${loadingSize}px`, height: `${loadingSize}px` });
+                    } else {
+                        $("#loading").css({ width: "296px", height: "296px" });
+                    }
+
+                    requestAnimationFrame(update);
+                };
+                update();
+            }
+
+            function resetIdleTimer() {
+                if (isResponseAudioPlaying) {
+                    return;
+                }
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(() => {
+                    if (transcriptText) {
+                        $("#loading").show();
+                        stopRecognition();
+                        sendToBackend(transcriptText);
+                        transcriptText = "";
+                    }
+                }, 2000);
+            }
+
+            function sendToBackend(text) {
+                console.log("Text:", text);
+
+                if (isRequestPending && ajaxRequest) {
+                    ajaxRequest.abort();
+                    $("#loading").hide();
+                    startRecognition();
+                    circle.css({ width: "300px", height: "300px" });
+                    return;
+                }
+
+                isRequestPending = true;
+
+                $.ajax({
+                    type: "POST",
+                    url: "http://localhost:7000/process_speech",
+                    data: JSON.stringify({
+                        speech_text: text,
+                        session_id: "12345abcd"
+                    }),
+                    contentType: "application/json",
+                    success: function(response) {
+                        isRequestPending = false;
+                        if (response.issue) {
+                            $("#loading").hide();
+                            startRecognition();
+
+                            circle.css({ width: "300px", height: "300px" });
+                            console.log("response.language: ", response.language);
+                            if (response.language === "ar" || response.language === "ur") {
+                                console.log("ar!!!");
+                                getSpeech(response.message, "12345abcd");
+                            } else {
+                                console.log("en!!!");
+                                playResponseAudio(response.message);
+                            }
+                            startAudioProcessing()
+                            if (!isRecognitionActive) {
+                                recognition.start();
+                                isRecognitionActive = true;
+                            }
+                        }
+                        if (response.message) {
+                            
+                            startRecognition();
+
+                            circle.css({ width: "300px", height: "300px" });
+                            language = response.language
+                            console.log("response: ", response.message);                            
+                            $("#loading").hide();
+                            resultText.text(response.message);
+                            console.log("response.language: ", response.language);
+                            if (response.language === "ar" || response.language === "ur") {
+                                console.log("ar!!!");
+                                getSpeech(response.message, "12345abcd");
+                            } else {
+                                console.log("en!!!");
+                                playResponseAudio(response.message);
+                            }
+                            startAudioProcessing()
+                            if (!isRecognitionActive) {
+                                recognition.start();
+                                isRecognitionActive = true;
+                            }
+                        }
+                    },
+                    error: function(error) {
+                        isRequestPending = false;
+                        $("#loading").hide();
+                        startRecognition();
+
+                        circle.css({ width: "300px", height: "300px" });
+                        if (!isRecognitionActive) {
+                            recognition.start();
+                            isRecognitionActive = true;
+                        }
+                    },
+                    beforeSend: function(xhr) {
+                        ajaxRequest = xhr;
+                    }
+                });
+            }
+
+            function getSpeech(text, session_id) {
+                $.ajax({
+                    type: "POST",
+                    url: "http://localhost:7000/tts",
+                    data: JSON.stringify({ text: text, language: language, session_id: session_id }),
+                    contentType: "application/json",
+                    xhrFields: {
+                        responseType: "blob"
+                    },
+                    success: function(blob) {
+                        if (isResponseAudioPlaying) {
+                            window.speechSynthesis.cancel();
+                        if (responseAudio) {
+                            responseAudio.pause();
+                            responseAudio.currentTime = 0;
+                        }
+                        }
+
+                        if (isResponseAudioPlaying && responseAudio) {
+                            window.speechSynthesis.cancel();
+                            if (responseAudio) {
+                                responseAudio.pause();
+                                responseAudio.currentTime = 0;
+                            }
+                        }
+
+                        isTtsAudio = true;
+                        const audioUrl = URL.createObjectURL(blob);
+                        const audio = new Audio(audioUrl);
+                        responseAudio = audio;
+
+                        const playbackAnalyser = audioContext.createAnalyser();
+                        playbackAnalyser.fftSize = 2048;
+                        
+                        if (microphoneStream) {
+                            microphoneStream.disconnect();
+                        }
+
+                        const gainNode = audioContext.createGain();
+                        gainNode.gain.value = 0.2;
+
+                        const source = audioContext.createMediaElementSource(audio);
+                        
+                        source.connect(gainNode);
+                        gainNode.connect(playbackAnalyser);
+                        playbackAnalyser.connect(audioContext.destination);
+                        
+                        audio.onplay = () => {
+                            console.log("Playing audio...");
+                            isResponseAudioPlaying = true;
+                            virtualAnimateResponseCircle(playbackAnalyser);
+                        };
+
+                        audio.onended = () => {
+                            console.log("Audio playback ended.");
+                            isResponseAudioPlaying = false;
+                            circle.css({ width: "300px", height: "300px" });
+
+                            if (microphoneStream) {
+                                console.log("reconnecting the microphone analyser");
+                                microphoneStream.connect(analyser);
+                            }
+
+                            if (!isRecognitionActive) {
+                                recognition.start();
+                                isRecognitionActive = true;
+                            }
+                        };
+        
+                        audio.onerror = (e) => {
+                            console.error("Audio playback error:", e);
+                            isResponseAudioPlaying = false;
+                            circle.css({ width: "300px", height: "300px" });
+
+                            if (microphoneStream) {
+                                console.log("reconnecting the microphone analyser");
+                                microphoneStream.connect(analyser);
+                            }
+                            if (!isRecognitionActive) {
+                                recognition.start();
+                                isRecognitionActive = true;
+                            }
+                        };
+
+                        audio.play();
+
+                        isResponseAudioPlaying = true;
+
+                        circle.one("click", function() {
+                            if (isResponseAudioPlaying) {
+                                console.log("Audio playback interrupted by user.");
+                                circle.css({ width: "300px", height: "300px" });
+                                if (responseAudio) {
+                                    responseAudio.pause();
+                                    responseAudio.currentTime = 0;
+                                }
+                                audio.currentTime = 0;
+                                isResponseAudioPlaying = false;
+
+                                if (microphoneStream) {
+                                console.log("reconnecting the microphone analyser");
+                                    microphoneStream.connect(analyser);
+                                }
+                
+                                if (!isRecognitionActive) {
+                                    recognition.start();
+                                    isRecognitionActive = true;
+                                }
+                            }
+                        });
+                    },
+                    error: function(error) {
+                        console.error("Error in TTS request:", error);
+                    }
+                });
+            }
+
+
+            function playResponseAudio(text) {
+                if (isResponseAudioPlaying) {
+                    console.log("Initial condition!!!");
+                        circle.css({ width: "300px", height: "300px" });
+                        window.speechSynthesis.cancel();
+                        if (!isRecognitionActive){
+                            recognition.start();
+                            isRecognitionActive = true;
+                        }
+                    }
+
+                if (isResponseAudioPlaying && responseAudio) {
+                    console.log("Initial condition--!!!");
+                    circle.css({ width: "300px", height: "300px" });
+                    window.speechSynthesis.cancel();
+                        if (!isRecognitionActive){
+                            recognition.start();
+                            isRecognitionActive = true;
+                        }
+                    }
+
+                isTtsAudio = true;
+
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 0.8; 
+                utterance.volume = 0.5; 
+
+                const voices = window.speechSynthesis.getVoices();
+                const selectedVoice = voices.find(voice => voice.name === "Microsoft Mark - English (United States)");
+
+                console.log("Language: ", language);
+                if (selectedVoice) {
+                    utterance.voice = selectedVoice;
+                } else {
+                    console.warn("Microsoft Mark voice not found. Using default voice.");
+                }
+
+                utterance.onstart = () => {
+                    isResponseAudioPlaying = true;
+                    animateResponseCircle();
+                };
+
+                utterance.onend = () => {
+                    isResponseAudioPlaying = false;
+                    circle.css({ width: "300px", height: "300px" });
+                    if (!isRecognitionActive){
+                        recognition.start();
+                        isRecognitionActive = true;
+                    }
+                };
+
+                utterance.onerror = (e) => {
+                    isResponseAudioPlaying = false;
+                    circle.css({ width: "300px", height: "300px" });
+                    if (!isRecognitionActive){
+                        recognition.start();
+                        isRecognitionActive = true;
+                    }
+                };
+
+                window.speechSynthesis.speak(utterance);
+                
+                isResponseAudioPlaying = true;
+
+                circle.one("click", function(){
+                    if (isResponseAudioPlaying) {
+                        circle.css({ width: "300px", height: "300px" });
+                        window.speechSynthesis.cancel();
+                        if (!isRecognitionActive){
+                            recognition.start();
+                            isRecognitionActive = true;
+                        }
+                    }
+                })
+            }
+
+
+            function virtualAnimateResponseCircle(activeAnalyser) {
+                const dataArray = new Uint8Array(activeAnalyser.frequencyBinCount);
+
+                const updateAnimation = () => {
+                    activeAnalyser.getByteFrequencyData(dataArray);
+                    const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                    
+                    if (average > 5) {
+                        const maxSize = 500;
+                        const minSize = 300;
+                        const size = minSize + (average / 255) * (maxSize - minSize);
+                        circle.css({ width: `${size}px`, height: `${size}px` });
+                    } else {
+                        circle.css({ width: "300px", height: "300px" });
+                    }
+
+                    if (isResponseAudioPlaying) {
+                        requestAnimationFrame(updateAnimation);
+                    }
+                };
+                updateAnimation();
+            }
+
+
+            function animateResponseCircle() {
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                const updateAnimation = () => {
+                    analyser.getByteFrequencyData(dataArray);
+                    const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                    // console.log("average!!!", average);
+                    if (average > 5) {
+                        const maxSize = 500;
+                        const minSize = 300;
+                        const size = minSize + (average / 255) * (maxSize - minSize);
+                        circle.css({ width: `${size}px`, height: `${size}px` });
+                    } else {
+                        circle.css({ width: "300px", height: "300px" });
+                    }
+
+                    requestAnimationFrame(updateAnimation);
+                };
+                updateAnimation();
+            }
+
+            $("#loading").on("click", function() {
+                if (isRequestPending) {
+                    isRequestPending = false;
+                    ajaxRequest.abort();
+                    $("#loading").hide();
+                    startRecognition();
+                    circle.css({ width: "300px", height: "300px" });
+                }
+            });
+
+            $("#circle").on("click", function() {
+                if (isRequestPending) {
+                    isRequestPending = false;
+                    ajaxRequest.abort();
+                    $("#loading").hide();
+                    startRecognition();
+                    circle.css({ width: "300px", height: "300px" });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
